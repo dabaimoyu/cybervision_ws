@@ -1,0 +1,128 @@
+CyberVision Edge 项目结构说明
+================================
+
+cybervision_ws/                      # ROS 2 工作空间根目录
+├── src/
+│   ├── cybervision_interfaces/      # 自定义 ROS 2 消息包
+│   │   ├── CMakeLists.txt
+│   │   ├── package.xml
+│   │   └── msg/                     # 消息定义文件
+│   │       ├── PerceptionResult.msg # 感知结果消息
+│   │       └── DetectedObject3D.msg # 3D 检测目标消息
+│   │
+│   └── cybervision_edge/            # 主项目包
+│       ├── CMakeLists.txt           # CMake 构建配置
+│       ├── package.xml              # ROS 2 包描述文件
+│       ├── launch/                  # ROS 2 launch 文件
+│       │   └── cybervision.launch.py
+│       ├── scripts/                 # 辅助脚本
+│       │   └── build_engine.sh      # TensorRT 模型转换脚本
+│       ├── include/                 # 头文件
+│       │   ├── video_streamer.hpp   # FFmpeg 推流器
+│       │   ├── trt_engine.hpp       # TensorRT 推理引擎
+│       │   ├── camera_model.hpp     # 相机模型与反投影
+│       │   └── double_buffer.hpp    # 双缓冲机制
+│       ├── src/                     # 源代码
+│       │   ├── infer_node/          # 进程 A: AI 推理节点
+│       │   │   ├── main.cpp         # 主程序入口
+│       │   │   ├── video_streamer.cpp
+│       │   │   ├── trt_engine.cpp
+│       │   │   └── camera_model.cpp
+│       │   │
+│       │   └── render_node/         # 进程 B: 渲染节点
+│       │       ├── main.cpp         # 主程序入口
+│       │       ├── double_buffer.cpp
+│       │       ├── osg_renderer.cpp (TODO)
+│       │       ├── qt_gui.cpp (TODO)
+│       │       └── perception_subscriber.cpp (TODO)
+│       │
+│       └── QUICKSTART.md            # 快速开始指南
+
+架构说明
+========
+
+进程间通信架构:
+-------------------
+┌─────────────────────────┐         ┌─────────────────────────┐
+│  Process A              │         │  Process B              │
+│  cybervision_infer_node │         │  cybervision_render_node│
+│                         │         │                         │
+│  ┌──────────────────┐   │         │   ┌──────────────────┐  │
+│  │ VideoStreamer    │   │         │   │ ROS 2 Subscriber │  │
+│  │ (FFmpeg 解码)     │   │         │   │ (接收感知数据)    │  │
+│  └────────┬─────────┘   │         │   └──────┬───────────┘  │
+│           │             │         │          │               │
+│  ┌────────▼─────────┐   │         │   ┌──────▼───────────┐  │
+│  │ TrtEngine        │   │         │   │ DoubleBuffer     │  │
+│  │ (TensorRT 推理)   │   │         │   │ (双缓冲机制)      │  │
+│  └────────┬─────────┘   │         │   └──────┬───────────┘  │
+│           │             │         │          │               │
+│  ┌────────▼─────────┐   │         │   ┌──────▼───────────┐  │
+│  │ CameraModel      │   │         │   │ OSG Renderer     │  │
+│  │ (IPM 反投影)      │   │         │   │ (三维渲染)        │  │
+│  └────────┬─────────┘   │         │   └──────────────────┘  │
+│           │             │         │                         │
+│  ┌────────▼─────────┐   │         │  ┌──────────────────┐  │
+│  │ ROS 2 Publisher  │◄──┼─────────┼──►│ Qt GUI           │  │
+│  │ (发布感知结果)    │   │         │  │ (大屏界面)        │  │
+│  └──────────────────┘   │         │  └──────────────────┘  │
+│                         │         │                         │
+└─────────────────────────┘         └─────────────────────────┘
+           │                                     │
+           └──────────────┬──────────────────────┘
+                          │
+                    ROS 2 DDS 通信
+                (perception_results Topic)
+
+
+数据流:
+------
+1. 视频文件 (MP4) 
+   ↓ (FFmpeg 解码)
+2. cv::Mat 帧队列 (ThreadSafeQueue, 深度=5)
+   ↓ (按 FPS 控制拉取)
+3. TensorRT 推理 (预分配显存，零泄漏)
+   ↓ (NMS 后处理)
+4. Detection[] (2D 边界框)
+   ↓ (IPM 反投影)
+5. Object3D[] (3D 坐标 + 尺寸)
+   ↓ (ROS 2 发布)
+6. PerceptionResult 消息
+   ↓ (DDS 传输)
+7. 双缓冲区 (无锁/低锁设计)
+   ↓ (OSG 渲染线程读取)
+8. OpenSceneGraph 场景图更新
+   ↓ (OpenGL 渲染)
+9. Qt 界面显示 (2D 视频 +3D 场景)
+
+
+核心设计模式:
+-------------
+1. **对象池模式** (Object Pool)
+   - 预分配 50 个 OSG 节点，避免运行时 new/delete
+   
+2. **双缓冲模式** (Double Buffering)
+   - ROS 2 写，OSG 读，通过原子操作交换指针
+   
+3. **生产者 - 消费者模式**
+   - FFmpeg 解码线程生产，TensorRT 推理线程消费
+   
+4. **定长队列防雪崩**
+   - 队列满时主动丢帧，防止内存爆炸
+
+
+显存管理策略:
+-------------
+- TensorRT 在构造函数中一次性预分配所有显存
+- 推理循环中严禁任何 new/delete/malloc/free
+- CUDA Stream 异步传输，重叠计算和通信
+- FP16 量化减少 50% 显存占用
+
+
+下一步开发计划:
+---------------
+✅ 第一周：完成 TensorRT 推理 + FFmpeg 解码
+⏳ 第二周：完善多线程 + ROS 2 集成
+⏳ 第三周：实现 OSG 渲染管线
+⏳ 第四周：Qt GUI 和性能监控
+⏳ 第五周：反投影优化 + 系统联调

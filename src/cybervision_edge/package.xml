@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>cybervision_edge</name>
+  <version>0.1.0</version>
+  <description>CyberVision Edge - Edge Real-time Perception and 3D Digital Twin System</description>
+  <maintainer email="developer@example.com">developer</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>cybervision_interfaces</depend>
+  <depend>cv_bridge</depend>
+  <depend>sensor_msgs</depend>
+  <depend>libopencv-dev</depend>
+  <depend>libqt5-core</depend>
+  <depend>libqt5-gui</depend>
+  <depend>libqt5-widgets</depend>
+  <depend>libqt5-opengl</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
